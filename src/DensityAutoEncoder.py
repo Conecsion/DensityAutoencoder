@@ -148,7 +148,7 @@ class DensityEncoder(nn.Module):
                  downsampleFactors=(4, 2),
                  NA_num_layers=(2, 2),
                  NA_num_heads=(8, 16),
-                 NA_embed_dim=(896, 1344),
+                 NA_embed_dim=(896, 1792),
                  GA_num_layers=12,
                  GA_num_heads=16,
                  GA_embed_dim=1344,
@@ -180,9 +180,9 @@ class DensityEncoder(nn.Module):
 
     def forward(self, x):
         # x: [B, 1, D, H, W]
-        x = self.downsample1(x)  # [B, 64, D/4, H/4, W/4]
+        x = self.downsample1(x)  # [B, 64, 56, 56, 56]
         x = self.encode1(x)
-        x = self.downsample2(x)
+        x = self.downsample2(x) # [B, 512, 28, 28, 28]
         x = self.encode2(x)
         B, C, D, H, W = x.shape
         x = x.flatten(2).transpose(1, 2)  # [B, D*H*W, C]
@@ -198,7 +198,7 @@ class DensityDecoder(nn.Module):
                  upsampleFactors=(2, 4),
                  NA_num_layers=(2, 2),
                  NA_num_heads=(16, 8),
-                 NA_embed_dim=(1344, 896),
+                 NA_embed_dim=(1792, 896),
                  kernel_size=7):
         super().__init__()
         self.decode1 = nn.Sequential(*[

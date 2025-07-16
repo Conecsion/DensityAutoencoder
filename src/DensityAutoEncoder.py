@@ -117,15 +117,15 @@ class GlobalAttentionBlock(nn.Module):
         self.proj_in = nn.Linear(
             in_channels,
             embed_dim) if embed_dim != in_channels else nn.Identity()
-        self.norm1 = nn.LayerNorm(in_channels)
-        self.attn = nn.MultiheadAttention(in_channels,
+        self.norm1 = nn.LayerNorm(embed_dim)
+        self.attn = nn.MultiheadAttention(embed_dim,
                                           num_heads,
                                           dropout=dropout,
                                           batch_first=True)
-        self.norm2 = nn.LayerNorm(in_channels)
+        self.norm2 = nn.LayerNorm(embed_dim)
         self.mlp = nn.Sequential(
-            nn.Linear(in_channels, int(in_channels * mlp_ratio)), nn.GELU(),
-            nn.Linear(int(in_channels * mlp_ratio), in_channels))
+            nn.Linear(embed_dim, int(embed_dim * mlp_ratio)), nn.GELU(),
+            nn.Linear(int(embed_dim * mlp_ratio), embed_dim))
         self.proj_out = nn.Linear(
             embed_dim,
             in_channels) if embed_dim != in_channels else nn.Identity()

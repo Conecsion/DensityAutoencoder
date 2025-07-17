@@ -134,7 +134,7 @@ class DensityEncoder(nn.Module):
         self.downsample1 = PixelUnshuffle3D(
             downsampleFactors[0])  # [B, 64, D//4, H//4, W//4]
         c1 = in_channels * downsampleFactors[0]**3  # c1 = 64
-        c2 = NA_head_dim[0] * NA_num_heads[0]  # c2 = 448
+        c2 = int(NA_head_dim[0] * NA_num_heads[0])  # c2 = 448
         self.proj1 = nn.Conv3d(c1, c2, kernel_size=1)  # [B, 448, 56, 56, 56]
         self.encode1 = nn.Sequential(*[
             NA3DBlock(in_channels=c2,
@@ -146,7 +146,7 @@ class DensityEncoder(nn.Module):
         self.downsample2 = PixelUnshuffle3D(
             downsampleFactors[1])  #[B, 512, 28, 28, 28]
         c3 = c1 * downsampleFactors[1]**3  # c3 = 512
-        c4 = NA_head_dim[1] * NA_num_heads[1]  # c4 = 896
+        c4 = int(NA_head_dim[1] * NA_num_heads[1])  # c4 = 896
         self.proj3 = nn.Conv3d(c3, c4, kernel_size=1)  # [B, 896, 28, 28, 28]
         self.encode2 = nn.Sequential(*[
             NA3DBlock(c4, kernel_size=kernel_size, num_heads=NA_num_heads[1])
@@ -190,7 +190,7 @@ class DensityDecoder(nn.Module):
                  NA_head_dim=(56, 56),
                  kernel_size=7):
         super().__init__()
-        c1 = NA_head_dim[0] * NA_num_heads[0]  # c1 = 896
+        c1 = int(NA_head_dim[0] * NA_num_heads[0])  # c1 = 896
         self.proj1 = nn.Conv3d(in_channels, c1,
                                kernel_size=1)  # [B, 896, 28, 28, 28]
         self.decode1 = nn.Sequential(*[
@@ -204,7 +204,7 @@ class DensityDecoder(nn.Module):
         self.upsample1 = PixelShuffle3D(
             upsampleFactors[0])  # [B, 64, 56, 56, 56]
         c2 = in_channels / upsampleFactors[0]**3  # c2 = 64
-        c3 = NA_head_dim[1] * NA_num_heads[1]  # c3 = 448
+        c3 = int(NA_head_dim[1] * NA_num_heads[1])  # c3 = 448
         self.proj3 = nn.Conv3d(c2, c3, kernel_size=1)  # [B, 448, 56, 56, 56]
         self.decode2 = nn.Sequential(*[
             NA3DBlock(in_channels=c3,

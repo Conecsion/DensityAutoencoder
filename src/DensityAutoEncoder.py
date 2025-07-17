@@ -62,15 +62,16 @@ class AdaRMSNorm3D(nn.Module):
 
 class LayerNorm3D(nn.Module):
 
-    def __init__(self):
+    def __init__(self, dim):
         super().__init__()
+        self.dim = dim
 
     def forward(self, x):
         # Expect x in shape [B, C, D, H, W]
         x = x.permute(0, 2, 3, 4, 1).contiguous()  # [B, D, H, W, C]
         b, d, h, w, c = x.shape
         x = x.view(-1, c)
-        x = nn.LayerNorm(c)(x)
+        x = nn.LayerNorm(self.dim)(x)
         x = x.view(b, d, h, w, c).permute(0, 4, 1, 2, 3).contiguous()
         return x
 
@@ -90,7 +91,7 @@ class NA3DBlock(nn.Module):
                  mlp_ratio=4.0):
         super().__init__()
         # self.norm1 = AdaRMSNorm3D(in_channels)
-        self.norm1 = LayerNorm3D()
+        self.norm1 = nn.LayerNorm(in_channels)
         self.attn = natten.NeighborhoodAttention3D(embed_dim=in_channels,
                                                    num_heads=num_heads,
                                                    kernel_size=kernel_size,
@@ -98,17 +99,21 @@ class NA3DBlock(nn.Module):
                                                    dilation=dilation,
                                                    proj_drop=proj_drop)
         # self.norm2 = AdaRMSNorm3D(in_channels)
-        self.norm2 = LayerNorm3D()
+        self.norm2 = nn.LayerNorm(in_channels)
         self.mlp = nn.Sequential(
             nn.Conv3d(in_channels, int(mlp_ratio * in_channels), kernel_size=1),
             nn.GELU(),
             nn.Conv3d(int(in_channels * mlp_ratio), in_channels, kernel_size=1))
 
     def forward(self, x):
-        h = self.norm1(x).permute(0, 2, 3, 4, 1).contiguous()  # [B, D, H, W, C]
-        h = self.attn(h).permute(0, 4, 1, 2, 3).contiguous()  # [B, C, D, H, W]
+        x = x.permute(0, 2, 3, 4, 1).contiguous()  # [B, D, H, W, C]
+        h = self.norm1(x)
+        # h = self.norm1(x).permute(0, 2, 3, 4, 1).contiguous()  # [B, D, H, W, C]
+        h = self.attn(h)
         x = x + h  # Residual connection
-        x = x + self.mlp(self.norm2(x))
+        x = x.permute(0, 4, 1, 2, 3) + self.mlp(
+            self.norm2(x).permute(0, 4, 1, 2,
+                                  3).contiguous())  # [B, C, D, H, W]
         return x
 
 

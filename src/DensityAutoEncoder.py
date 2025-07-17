@@ -203,7 +203,7 @@ class DensityDecoder(nn.Module):
                                kernel_size=1)  # [B, 512, 28, 28, 28]
         self.upsample1 = PixelShuffle3D(
             upsampleFactors[0])  # [B, 64, 56, 56, 56]
-        c2 = in_channels / upsampleFactors[0]**3  # c2 = 64
+        c2 = int(in_channels // (upsampleFactors[0]**3))  # c2 = 64
         c3 = int(NA_head_dim[1] * NA_num_heads[1])  # c3 = 448
         self.proj3 = nn.Conv3d(c2, c3, kernel_size=1)  # [B, 448, 56, 56, 56]
         self.decode2 = nn.Sequential(*[

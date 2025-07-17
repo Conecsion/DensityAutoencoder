@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 import natten
-from natten import na3d, NeighborhoodAttention3D
 
 
 class PixelUnshuffle3D(nn.Module):
@@ -68,7 +67,6 @@ class NA3DBlock(nn.Module):
     # Or NATTEN cannot find a suitable backend
     def __init__(self,
                  in_channels,
-                 embed_dim,
                  kernel_size,
                  num_heads,
                  stride=1,
@@ -76,68 +74,47 @@ class NA3DBlock(nn.Module):
                  proj_drop=0.0,
                  mlp_ratio=4.0):
         super().__init__()
-        self.proj_in = nn.Conv3d(
-            in_channels, embed_dim,
-            1) if embed_dim != in_channels else nn.Identity()
-        self.norm1 = AdaRMSNorm3D(embed_dim)
-        self.attn = natten.NeighborhoodAttention3D(embed_dim=embed_dim,
+        self.norm1 = AdaRMSNorm3D(in_channels)
+        self.attn = natten.NeighborhoodAttention3D(embed_dim=in_channels,
                                                    num_heads=num_heads,
                                                    kernel_size=kernel_size,
                                                    stride=stride,
                                                    dilation=dilation,
                                                    proj_drop=proj_drop)
-        self.norm2 = AdaRMSNorm3D(embed_dim)
+        self.norm2 = AdaRMSNorm3D(in_channels)
         self.mlp = nn.Sequential(
-            nn.Conv3d(embed_dim, int(mlp_ratio * embed_dim), kernel_size=1),
+            nn.Conv3d(in_channels, int(mlp_ratio * in_channels), kernel_size=1),
             nn.GELU(),
-            nn.Conv3d(int(embed_dim * mlp_ratio), embed_dim, kernel_size=1))
-        self.proj_out = nn.Conv3d(
-            embed_dim, in_channels,
-            1) if embed_dim != in_channels else nn.Identity()
+            nn.Conv3d(int(in_channels * mlp_ratio), in_channels, kernel_size=1))
 
     def forward(self, x):
-        x = self.proj_in(x)
         h = self.norm1(x).permute(0, 2, 3, 4, 1).contiguous()  # [B, D, H, W, C]
         h = self.attn(h).permute(0, 4, 1, 2, 3).contiguous()  # [B, C, D, H, W]
         x = x + h  # Residual connection
         x = x + self.mlp(self.norm2(x))
-        x = self.proj_out(x)
         return x
 
 
 class GlobalAttentionBlock(nn.Module):
 
-    def __init__(self,
-                 in_channels,
-                 embed_dim,
-                 num_heads=8,
-                 dropout=0.0,
-                 mlp_ratio=4.0):
+    def __init__(self, in_channels, num_heads=8, dropout=0.0, mlp_ratio=4.0):
         super().__init__()
-        self.proj_in = nn.Linear(
-            in_channels,
-            embed_dim) if embed_dim != in_channels else nn.Identity()
-        self.norm1 = nn.LayerNorm(embed_dim)
-        self.attn = nn.MultiheadAttention(embed_dim,
+        self.norm1 = nn.LayerNorm(in_channels)
+        self.attn = nn.MultiheadAttention(in_channels,
                                           num_heads,
                                           dropout=dropout,
                                           batch_first=True)
-        self.norm2 = nn.LayerNorm(embed_dim)
+        self.norm2 = nn.LayerNorm(in_channels)
         self.mlp = nn.Sequential(
-            nn.Linear(embed_dim, int(embed_dim * mlp_ratio)), nn.GELU(),
-            nn.Linear(int(embed_dim * mlp_ratio), embed_dim))
-        self.proj_out = nn.Linear(
-            embed_dim,
-            in_channels) if embed_dim != in_channels else nn.Identity()
+            nn.Linear(in_channels, int(in_channels * mlp_ratio)), nn.GELU(),
+            nn.Linear(int(in_channels * mlp_ratio), in_channels))
 
     def forward(self, x):
         # x: [B, D*H*W, C]
-        x = self.proj_in(x)  # [B, D*H*W, embed_dim]
         h = self.norm1(x)
         h, _ = self.attn(h, h, h, need_weights=False)
         x = x + h
         x = x + self.mlp(self.norm2(x))
-        x = self.proj_out(x)
         return x
 
 
@@ -148,46 +125,58 @@ class DensityEncoder(nn.Module):
                  downsampleFactors=(4, 2),
                  NA_num_layers=(2, 2),
                  NA_num_heads=(8, 16),
-                 NA_embed_dim=(896, 1792),
+                 NA_head_dim=(56, 56),
                  GA_num_layers=12,
                  GA_num_heads=16,
-                 GA_embed_dim=1344,
+                 GA_head_dim=56,
                  kernel_size=7):
         super().__init__()
         self.downsample1 = PixelUnshuffle3D(
             downsampleFactors[0])  # [B, 64, D//4, H//4, W//4]
-        channels = in_channels * downsampleFactors[0]**3
+        c1 = in_channels * downsampleFactors[0]**3  # c1 = 64
+        c2 = NA_head_dim[0] * NA_num_heads[0]  # c2 = 448
+        self.proj1 = nn.Conv3d(c1, c2, kernel_size=1)  # [B, 448, 56, 56, 56]
         self.encode1 = nn.Sequential(*[
-            NA3DBlock(in_channels=channels,
-                      embed_dim=NA_embed_dim[0],
+            NA3DBlock(in_channels=c2,
                       kernel_size=kernel_size,
                       num_heads=NA_num_heads[0])
             for _ in range(NA_num_layers[0])
         ])
-        self.downsample2 = PixelUnshuffle3D(downsampleFactors[1])
-        channels = channels * downsampleFactors[1]**3
+        self.proj2 = nn.Conv3d(c2, c1, kernel_size=1)  # [B, 64, 56, 56, 56]
+        self.downsample2 = PixelUnshuffle3D(
+            downsampleFactors[1])  #[B, 512, 28, 28, 28]
+        c3 = c1 * downsampleFactors[1]**3  # c3 = 512
+        c4 = NA_head_dim[1] * NA_num_heads[1]  # c4 = 896
+        self.proj3 = nn.Conv3d(c3, c4, kernel_size=1)  # [B, 896, 28, 28, 28]
         self.encode2 = nn.Sequential(*[
-            NA3DBlock(channels,
-                      embed_dim=NA_embed_dim[1],
-                      kernel_size=kernel_size,
-                      num_heads=NA_num_heads[1])
+            NA3DBlock(c4, kernel_size=kernel_size, num_heads=NA_num_heads[1])
             for _ in range(NA_num_layers[1])
         ])
+        self.proj4 = nn.Conv3d(c4, c3, kernel_size=1)  # [B, 512, 28, 28, 28]
+        c5 = GA_num_heads * GA_head_dim  # c5 = 896
+        self.proj5 = nn.Conv3d(c3, c5, kernel_size=1)  # [B, 896, 28, 28, 28]
         self.bottleneck = nn.Sequential(*[
-            GlobalAttentionBlock(channels, GA_embed_dim, num_heads=GA_num_heads)
+            GlobalAttentionBlock(c5, num_heads=GA_num_heads)
             for _ in range(GA_num_layers)
         ])
+        self.proj6 = nn.Conv3d(c5, c3, kernel_size=1)  # [B, 512, 28, 28, 28]
 
     def forward(self, x):
         # x: [B, 1, D, H, W]
         x = self.downsample1(x)  # [B, 64, 56, 56, 56]
+        x = self.proj1(x)  # [B, 448, 56, 56, 56]
         x = self.encode1(x)
-        x = self.downsample2(x) # [B, 512, 28, 28, 28]
+        x = self.proj2(x)  # [B, 64, 56, 56, 56]
+        x = self.downsample2(x)  # [B, 512, 28, 28, 28]
+        x = self.proj3(x)  # [B, 896, 28, 28, 28]
         x = self.encode2(x)
+        x = self.proj4(x)  # [B, 512, 28, 28, 28]
+        x = self.proj5(x)  # [B, 896, 28, 28, 28]
         B, C, D, H, W = x.shape
         x = x.flatten(2).transpose(1, 2)  # [B, D*H*W, C]
         x = self.bottleneck(x).transpose(1, 2)  # [B, C, D*H*W]
         x = x.view(B, C, D, H, W)
+        x = self.proj6(x)  # [B, 512, 28, 28, 28]
         return x
 
 
@@ -198,42 +187,51 @@ class DensityDecoder(nn.Module):
                  upsampleFactors=(2, 4),
                  NA_num_layers=(2, 2),
                  NA_num_heads=(16, 8),
-                 NA_embed_dim=(1792, 896),
+                 NA_head_dim=(56, 56),
                  kernel_size=7):
         super().__init__()
+        c1 = NA_head_dim[0] * NA_num_heads[0]  # c1 = 896
+        self.proj1 = nn.Conv3d(in_channels, c1,
+                               kernel_size=1)  # [B, 896, 28, 28, 28]
         self.decode1 = nn.Sequential(*[
-            NA3DBlock(in_channels,
-                      NA_embed_dim[0],
+            NA3DBlock(in_channels=c1,
                       kernel_size=kernel_size,
                       num_heads=NA_num_heads[0])
             for _ in range(NA_num_layers[0])
         ])
-        self.upsample1 = PixelShuffle3D(upsampleFactors[0])
-        channels = in_channels // (upsampleFactors[0]**3)
+        self.proj2 = nn.Conv3d(c1, in_channels,
+                               kernel_size=1)  # [B, 512, 28, 28, 28]
+        self.upsample1 = PixelShuffle3D(
+            upsampleFactors[0])  # [B, 64, 56, 56, 56]
+        c2 = in_channels / upsampleFactors[0]**3  # c2 = 64
+        c3 = NA_head_dim[1] * NA_num_heads[1]  # c3 = 448
+        self.proj3 = nn.Conv3d(c2, c3, kernel_size=1)  # [B, 448, 56, 56, 56]
         self.decode2 = nn.Sequential(*[
-            NA3DBlock(channels,
-                      NA_embed_dim[1],
+            NA3DBlock(in_channels=c3,
                       kernel_size=kernel_size,
                       num_heads=NA_num_heads[1])
             for _ in range(NA_num_layers[1])
         ])
-        self.upsample2 = PixelShuffle3D(upsampleFactors[1])
-        channels = channels // (upsampleFactors[1]**3)
-        self.out_conv = nn.Conv3d(channels, 1, kernel_size=1)
+        self.proj4 = nn.Conv3d(c3, c2, kernel_size=1)  # [B, 64, 56, 56, 56]
+        self.upsample2 = PixelShuffle3D(
+            upsampleFactors[1])  # [B, 1, 112, 112, 112]
 
     def forward(self, x):
+        x = self.proj1(x)
         x = self.decode1(x)
+        x = self.proj2(x)
         x = self.upsample1(x)
+        x = self.proj3(x)
         x = self.decode2(x)
+        x = self.proj4(x)
         x = self.upsample2(x)
-        x = self.out_conv(x)
         return x
 
 
 if __name__ == '__main__':
 
     from torchinfo import summary
-    from thop import profile
+    # from thop import profile
 
     device = 'cuda:0'
     x = torch.randn(2, 1, 224, 224, 224).to(dtype=torch.bfloat16).to(device)

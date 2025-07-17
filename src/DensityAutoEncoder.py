@@ -60,6 +60,21 @@ class AdaRMSNorm3D(nn.Module):
         return x_normed * (self.scale * gamma_dynamic)
 
 
+class LayerNorm3D(nn.Module):
+
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x):
+        # Expect x in shape [B, C, D, H, W]
+        x = x.permute(0, 2, 3, 4, 1).contiguous()  # [B, D, H, W, C]
+        b, d, h, w, c = x.shape
+        x = x.view(-1, c)
+        x = nn.LayerNorm(c)(x)
+        x = x.view(b, d, h, w, c).permute(0, 4, 1, 2, 3).contiguous()
+        return x
+
+
 class NA3DBlock(nn.Module):
 
     # NOTE:
@@ -75,7 +90,7 @@ class NA3DBlock(nn.Module):
                  mlp_ratio=4.0):
         super().__init__()
         # self.norm1 = AdaRMSNorm3D(in_channels)
-        self.norm1 = nn.LayerNorm(in_channels)
+        self.norm1 = LayerNorm3D()
         self.attn = natten.NeighborhoodAttention3D(embed_dim=in_channels,
                                                    num_heads=num_heads,
                                                    kernel_size=kernel_size,
@@ -83,7 +98,7 @@ class NA3DBlock(nn.Module):
                                                    dilation=dilation,
                                                    proj_drop=proj_drop)
         # self.norm2 = AdaRMSNorm3D(in_channels)
-        self.norm2 = nn.LayerNorm(in_channels)
+        self.norm2 = LayerNorm3D()
         self.mlp = nn.Sequential(
             nn.Conv3d(in_channels, int(mlp_ratio * in_channels), kernel_size=1),
             nn.GELU(),
